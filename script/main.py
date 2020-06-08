@@ -21,24 +21,73 @@ from vgg_model import get_vgg_model
 from tqdm import tqdm
 
 
-def train(args, model, train_loader):
+
+
+
+
+
+
+
+
+
+
+
+def evaluate(answers, predictions):
+    # print('answer: ', answers)
+    # print('predict: ', predictions)
+    count_ans = {'A':0, 'B':0, 'C':0}
+    count_pred = {'A':0, 'B':0, 'C':0}
+    acc = {'A':0, 'B':0, 'C':0}
+
+    for key in answers.keys():
+        count_ans[answers[key]] += 1
+        count_pred[predictions[key]] += 1
+
+        if answers[key] == predictions[key]:
+            acc[answers[key]] += 1
+
+
+    print('ans: ', count_ans)
+    print('prediction: ', count_pred)
+    print('acc', acc)
+    print('recallA:', acc['A']/count_ans['A'])
+    print('recallB:', acc['B']/count_ans['B'])
+    print('recallC:', acc['C']/count_ans['C'])
+        
+    weight = {'A':0, 'B':0, 'C':0}
+    total_num = count_ans['A'] + count_ans['B'] + count_ans['C']
+    for k in ['A', 'B', 'C']:
+        weight[k] = count_ans[k] / total_num
+    # print(weight)
+
+    WAR = 0.0
+    for k in ['A', 'B', 'C']:
+        ### weight * recall
+        WAR += weight[k] * (acc[k]/count_ans[k])
+    print(WAR)
+    return WAR
+
+
+
+
+def train(args, model, train_loader, dev_loader, start_epoch):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    id2tag = {'0':'A', '1':'B', '2':'C'}
+    
     model.train()
     model.to(device)
-    print(model)
-
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=args.lr)
+
+
     for i_epoch in range(args.epoch):
-        
         pbar = tqdm(train_loader)
-        pbar.close()
-        pbar = tqdm(train_loader)
-
         running_loss = 0.0
-
+    
+        logging.info('[Train]')    
+        
         for i, data in enumerate(pbar):
             optimizer.zero_grad()
 
@@ -49,27 +98,50 @@ def train(args, model, train_loader):
             #imgs = imgs.permute(0, 2, 3, 1)
             tags = torch.stack(data['tags'], 0).to(device)
 
-            #print(imgs.shape)
-
             y = model(imgs)
-            #print('y:', y)
-            #print('tag', tags)
+            
             loss = criterion(y, tags)
             loss.backward()
             optimizer.step()
 
             running_loss += loss.item()
 
-            if i%100 == 99:
-                print('[%d %5d] loss:%03f' % (i_epoch, i, running_loss/100))
-                running_loss = 0.0
-        torch.save(model.state_dict(), '../model/model_%s' % (str(i_epoch)))
+            #if i%100 == 99:
+            #    print('[%d %5d] loss:%03f' % (i_epoch, i, running_loss/100))
+            #    running_loss = 0.0
+        ## finish a epoch
+        ## save model to specific directory
+        
 
+    ### run on dev set to avoid overfitting
+        logging.info('[Dev]')
+        dev_pbar = tqdm(dev_loader)
+        ### id->label
+        answers = {}
+        predictions = {}
+        for i, data in enumerate(dev_pbar):
+            batch_sz = len(data['imgs'])
+            imgs = torch.stack(data['imgs'], 0).to(device)
+            tags = torch.stack(data['tags'], 0).to(device)
+            names = data['names']
+            #print(names)
+            ### with no grad
+            with torch.no_grad():
+                y = model(imgs)
+            
+            for i_ans in range(batch_sz):
+                now_pred = y[i_ans].topk(1)[1].item()
+                predictions[names[i_ans]] = id2tag[str(now_pred)]
+                answers[names[i_ans]] = id2tag[str(tags[i_ans].item())]
+        
+        WAR = evaluate(answers, predictions)
 
-
-
-
-
+        torch.save({
+                'epoch': i_epoch + start_epoch,
+                'state_dict': model.state_dict(),
+                'WAR': WAR,
+            }, '../new_model/model_%s' % (str(i_epoch + start_epoch))
+        )
 
 
 
@@ -79,18 +151,13 @@ def predict(args, model, predict_loader):
 
     model.eval()
     model.to(device)
-    print(model)
 
-    
     cnt_total = 0
     cnt_same = 0
-
 
     ## output
     output_file = open(args.output, 'w')
     
-
-
     id2tag = {'0':'A', '1':'B', '2':'C'}
 
     pbar = tqdm(predict_loader)
@@ -101,26 +168,19 @@ def predict(args, model, predict_loader):
         tags = torch.stack(data['tags'], 0).to(device)
         names = data['names']
 
-
         with torch.no_grad():
             y = model(imgs)
-        
+       
         print('y:', y)
         for i_ans in range(batch_sz):
             cnt_total += 1
             now_pred = y[i_ans].topk(1)[1].item()
 
             print('ans:', tags[i_ans].item(), ' pre:', now_pred)
-
             output_file.write(names[i_ans]+','+id2tag[str(now_pred)]+'\n')
-
             if tags[i_ans].item() == y[i_ans].topk(1)[1].item():
                 cnt_same += 1
             
-
-
-
-
     print('total:', cnt_total, 'same:', cnt_same)
 
 
@@ -130,15 +190,26 @@ def predict(args, model, predict_loader):
 def get_train_transform(size): #mean=mean, std=std, size=0):
     train_transform = transforms.Compose([
         Resize((int(size * (256 / 224)), int(size * (256 / 224)))),
-        transforms.RandomCrop(size),
         transforms.RandomVerticalFlip(),
         transforms.RandomHorizontalFlip(),
-        #RandomRotate(15, 0.3),
+        transforms.RandomRotation(45),
+        transforms.RandomCrop(size),
         # RandomGaussianBlur(),
         transforms.ToTensor(),
         transforms.Normalize(0.5, 1),
     ])
     return train_transform
+
+
+def get_predict_transform(size): #mean=mean, std=std, size=0):
+    predict_transform = transforms.Compose([
+        Resize((int(size * (256 / 224)), int(size * (256 / 224)))),
+        transforms.ToTensor(),
+        transforms.Normalize(0.5, 1),
+    ])
+    return predict_transform
+
+
 
 
 def main(args):
@@ -147,17 +218,27 @@ def main(args):
     print(model)
 
     ## TODO: Crop method
-    transformer = get_train_transform(512)
-
     if args.do_train:
+        transformer = get_train_transform(512)
+        dev_transformer = get_predict_transform(512)
+
+
+
+        start_epoch = 0
+        if args.load_model:
+            logging.info('loading model...... %s' % (args.load_model))
+            checkpoint = torch.load(args.load_model)
+            model.load_state_dict(checkpoint['state_dict'])
+            start_epoch = checkpoint['epoch'] + 1
+
+
+
+        ### trainset
         trainset = MyDataset(
             args.data_list,
             args.data_dir,
             transform = transformer
         )
-
-        #print(trainset[1])
-        #print(len(trainset))
         train_loader = DataLoader(
             dataset = trainset,
             batch_size = args.batch_size,
@@ -165,17 +246,36 @@ def main(args):
             collate_fn = collate_picture
         )
 
-        train(args, model, train_loader)
+        ### dev set
+        devset = MyDataset(
+            args.dev_file,
+            args.data_dir,
+            transform = dev_transformer
+        )
+        dev_loader = DataLoader(
+            dataset = devset,
+            batch_size = args.batch_size,
+            shuffle = False,
+            collate_fn = collate_picture
+        )
+        train(args, model, train_loader, dev_loader, start_epoch)
     
+
     #### predict
     if args.do_predict:
+        transformer = get_predict_transform(512)
         if args.load_model == None and not args.do_train:
             logging.error('load model error')
             exit(1)
 
         elif args.load_model:
             logging.info('loading model...... %s' % (args.load_model))
-            model.load_state_dict(torch.load(args.load_model))
+            
+            checkpoint = torch.load(args.load_model)
+            model.load_state_dict(checkpoint['state_dict'])
+            start_epoch = checkpoint['epoch'] + 1
+            
+            #model.load_state_dict(torch.load(args.load_model))
 
         if args.predict_file == None:
             logging.error('No predict file')
@@ -214,7 +314,8 @@ def parse_argument():
     parser.add_argument('--size', default=512, type=int, help='image size')
     parser.add_argument('--do_predict', action='store_true', help='evaluate')
     parser.add_argument('--load_model', type=str, help='trained model')
-    parser.add_argument('--predict_file', default='../data/dev.csv', type=str, help='data directory')
+    parser.add_argument('--dev_file', default='../data/dev.csv', type=str, help='dev file')
+    parser.add_argument('--predict_file', default='../data/dev.csv', type=str, help='the input file for predict')
     parser.add_argument('--output', default='./prediction.csv', type=str, help='my prediction')
 
     args = parser.parse_args()
