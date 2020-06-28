@@ -17,6 +17,7 @@ import datetime
 
 from transform import Resize
 from model import MyModel
+from LRmodel import LRModel
 from vgg_model import get_vgg_model
 from vgg19_model import get_vgg19_model
 from tqdm import tqdm
@@ -69,10 +70,12 @@ def train(args, model, train_loader, dev_loader, start_epoch):
     model.train()
     model.to(device)
 
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=args.lr)    
+    #criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
 
-    loss_file = open('cnn_loss', 'w')
+    optimizer = optim.SGD(model.parameters(), lr=args.lr)
+    
+    #loss_file = open('cnn_loss', 'w')
 
     for i_epoch in range(args.epoch):
         logging.info('EPOCH: %d' % (start_epoch + i_epoch))
@@ -89,10 +92,10 @@ def train(args, model, train_loader, dev_loader, start_epoch):
             ### input/target
             imgs = torch.stack(data['imgs'], 0).to(device)
             #imgs = imgs.permute(0, 2, 3, 1)
-            tags = torch.stack(data['tags'], 0).to(device)
-
-            y = model(imgs)
+            tags = torch.stack(data['tags'], 0).to(device).unsqueeze(1)
             
+            y = model(imgs)
+            # print(y, tags)
             loss = criterion(y, tags)
             loss.backward()
             optimizer.step()
@@ -107,10 +110,8 @@ def train(args, model, train_loader, dev_loader, start_epoch):
         ## finish a epoch
         ## save model to specific directory
         print('training loss: %f' % (running_loss/total))
-        loss_file.write( str(i_epoch)+","+str(running_loss/total) )
+        #loss_file.write( str(i_epoch)+","+str(running_loss/total) )
     
-
-
 
     ### run on dev set to avoid overfitting
         logging.info('[Dev]')
@@ -121,7 +122,7 @@ def train(args, model, train_loader, dev_loader, start_epoch):
         for i, data in enumerate(dev_pbar):
             batch_sz = len(data['imgs'])
             imgs = torch.stack(data['imgs'], 0).to(device)
-            tags = torch.stack(data['tags'], 0).to(device)
+            tags = torch.stack(data['tags'], 0).to(device).unsqueeze(1)
             names = data['names']
             #print(names)
             ### with no grad
@@ -129,9 +130,15 @@ def train(args, model, train_loader, dev_loader, start_epoch):
                 y = model(imgs)
             
             for i_ans in range(batch_sz):
-                now_pred = y[i_ans].topk(1)[1].item()
+                now_pred = int(y[i_ans].item()+0.5)
+                if now_pred > 2:
+                    now_pred = 2
+                if now_pred < 0:
+                    now_pred = 0
+                
                 predictions[names[i_ans]] = id2tag[str(now_pred)]
-                answers[names[i_ans]] = id2tag[str(tags[i_ans].item())]
+
+                answers[names[i_ans]] = id2tag[str(int(tags[i_ans].item()))]
         
         WAR = evaluate(answers, predictions)
 
@@ -222,15 +229,14 @@ def get_predict_transform(size): #mean=mean, std=std, size=0):
 
 
 def main(args):
-    model = MyModel(args.size)
-    #model = get_vgg_model()
+    model = LRModel(args.size)
+    #model = get_vgg19_model()
     print(model)
 
     ## TODO: Crop method
     if args.do_train:
         transformer = get_train_transform(512)
         dev_transformer = get_predict_transform(512)
-
 
         start_epoch = 0
         if args.load_model:

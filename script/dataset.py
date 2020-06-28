@@ -7,11 +7,10 @@ from PIL import Image
 
 
 tag_mapper = {
-    'A':0,
-    'B':1,
-    'C':2
+    'A':0.,
+    'B':1.,
+    'C':2.
 }
-
 
 
 class MyDataset(Dataset):
