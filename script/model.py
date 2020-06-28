@@ -14,7 +14,6 @@ class MyModel(nn.Module):
         super(MyModel, self).__init__()
         self.size = size
 
-
         self.conv1 = nn.Conv2d(
                 in_channels = 3,
                 out_channels = 128,
@@ -32,31 +31,18 @@ class MyModel(nn.Module):
                 padding = 0
             )
         self.bn2 = nn.BatchNorm2d(64)
-        '''
-        self.conv3 = nn.Conv2d(
-                in_channels = 2,
-                out_channels = 4,
-                kernel_size = 5,
-                stride = 1,
-                padding = 0
-            )
-        self.bn3 = nn.BatchNorm2d(4)
-        '''
-        #self.relu = F.relu
-        #self.max_pool = nn.MaxPool2d(kernel_size=2)
         
         self.in_dim = int(int(self.size/2-2)/2 - 2)
+        #self.in_dim = 143
 
         self.linear1 = nn.Linear(self.in_dim*self.in_dim*64, 120)
         self.linear2 = nn.Linear(120, 3)
 
     def forward(self, x):
-        #print('!')
         # batch * channel(3) * 32 * 32
         x = self.conv1(x)
         x = self.bn1(x)
         x = F.relu(F.max_pool2d(x, 2))
-        #print('one:', x.shape)
         # batch * channel * 16 * 16
 
         x = self.bn2(self.conv2(x))
@@ -70,6 +56,7 @@ class MyModel(nn.Module):
         
         y = self.linear1(y)
         y = self.linear2(y)
+        #y = nn.sigmoid(y)
         #print('linear', y.shape)
 
         return y

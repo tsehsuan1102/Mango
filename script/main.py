@@ -18,6 +18,7 @@ import datetime
 from transform import Resize
 from model import MyModel
 from vgg_model import get_vgg_model
+from vgg19_model import get_vgg19_model
 from tqdm import tqdm
 
 
@@ -25,16 +26,7 @@ from tqdm import tqdm
 
 
 
-
-
-
-
-
-
-
 def evaluate(answers, predictions):
-    # print('answer: ', answers)
-    # print('predict: ', predictions)
     count_ans = {'A':0, 'B':0, 'C':0}
     count_pred = {'A':0, 'B':0, 'C':0}
     acc = {'A':0, 'B':0, 'C':0}
@@ -42,7 +34,6 @@ def evaluate(answers, predictions):
     for key in answers.keys():
         count_ans[answers[key]] += 1
         count_pred[predictions[key]] += 1
-
         if answers[key] == predictions[key]:
             acc[answers[key]] += 1
 
@@ -80,14 +71,17 @@ def train(args, model, train_loader, dev_loader, start_epoch):
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=args.lr)
+    
 
+    loss_file = open('cnn_loss', 'w')
 
     for i_epoch in range(args.epoch):
+        logging.info('EPOCH: %d' % (start_epoch + i_epoch))
+
         pbar = tqdm(train_loader)
-        running_loss = 0.0
-    
+        running_loss = 0.0    
         logging.info('[Train]')    
-        
+        total = 0
         for i, data in enumerate(pbar):
             optimizer.zero_grad()
 
@@ -105,13 +99,19 @@ def train(args, model, train_loader, dev_loader, start_epoch):
             optimizer.step()
 
             running_loss += loss.item()
+            total += batch_sz
+            pbar.set_description('loss[%f]' % (loss.item()))
 
             #if i%100 == 99:
             #    print('[%d %5d] loss:%03f' % (i_epoch, i, running_loss/100))
             #    running_loss = 0.0
         ## finish a epoch
         ## save model to specific directory
-        
+        print('training loss: %f' % (running_loss/total))
+        loss_file.write( str(i_epoch)+","+str(running_loss/total) )
+    
+
+
 
     ### run on dev set to avoid overfitting
         logging.info('[Dev]')
@@ -136,12 +136,15 @@ def train(args, model, train_loader, dev_loader, start_epoch):
         
         WAR = evaluate(answers, predictions)
 
-        torch.save({
-                'epoch': i_epoch + start_epoch,
-                'state_dict': model.state_dict(),
-                'WAR': WAR,
-            }, '../new_model/model_%s' % (str(i_epoch + start_epoch))
-        )
+
+        if WAR >= 0.70:
+            logging.info('save model %s %f to ...' % (str(i_epoch+start_epoch), WAR) )
+            torch.save({
+                    'epoch': i_epoch + start_epoch,
+                    'state_dict': model.state_dict(),
+                    'WAR': WAR,
+                }, (args.save_path+'model_%s') % (str(i_epoch + start_epoch))
+            )
 
 
 
@@ -157,6 +160,7 @@ def predict(args, model, predict_loader):
 
     ## output
     output_file = open(args.output, 'w')
+    output_file.write('image_id, label\n')
     
     id2tag = {'0':'A', '1':'B', '2':'C'}
 
@@ -165,38 +169,42 @@ def predict(args, model, predict_loader):
         batch_sz = len(data['imgs'])
         imgs = torch.stack(data['imgs'], 0).to(device)
         #imgs = imgs.permute(0, 2, 3, 1)
-        tags = torch.stack(data['tags'], 0).to(device)
+        #tags = torch.stack(data['tags'], 0).to(device)
         names = data['names']
-
         with torch.no_grad():
             y = model(imgs)
        
-        print('y:', y)
+        #print('y:', y)
         for i_ans in range(batch_sz):
             cnt_total += 1
             now_pred = y[i_ans].topk(1)[1].item()
-
-            print('ans:', tags[i_ans].item(), ' pre:', now_pred)
+            #print('ans:', tags[i_ans].item(), ' pre:', now_pred)
             output_file.write(names[i_ans]+','+id2tag[str(now_pred)]+'\n')
-            if tags[i_ans].item() == y[i_ans].topk(1)[1].item():
-                cnt_same += 1
+            #if tags[i_ans].item() == y[i_ans].topk(1)[1].item():
+            #    cnt_same += 1
             
-    print('total:', cnt_total, 'same:', cnt_same)
+    #print('total:', cnt_total, 'same:', cnt_same)
+
+    logging.info('finish predict!')
 
 
 
 
+mean_nums = [0.485, 0.456, 0.406]
+std_nums = [0.229, 0.224, 0.225]
 
 def get_train_transform(size): #mean=mean, std=std, size=0):
     train_transform = transforms.Compose([
         Resize((int(size * (256 / 224)), int(size * (256 / 224)))),
+        #transforms.Resize(size, size),
         transforms.RandomVerticalFlip(),
         transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(45),
+        transforms.RandomRotation(degrees=30),
         transforms.RandomCrop(size),
+        #transforms.CenterCrop(size),
         # RandomGaussianBlur(),
         transforms.ToTensor(),
-        transforms.Normalize(0.5, 1),
+        transforms.Normalize(mean_nums, std_nums),
     ])
     return train_transform
 
@@ -204,8 +212,10 @@ def get_train_transform(size): #mean=mean, std=std, size=0):
 def get_predict_transform(size): #mean=mean, std=std, size=0):
     predict_transform = transforms.Compose([
         Resize((int(size * (256 / 224)), int(size * (256 / 224)))),
+        #transforms.Resize(size, size),
+        transforms.RandomCrop(size),
         transforms.ToTensor(),
-        transforms.Normalize(0.5, 1),
+        transforms.Normalize(mean_nums, std_nums),
     ])
     return predict_transform
 
@@ -213,15 +223,14 @@ def get_predict_transform(size): #mean=mean, std=std, size=0):
 
 
 def main(args):
-    #model = MyModel(args.size)
-    model = get_vgg_model()
+    model = MyModel(args.size)
+    #model = get_vgg19_model()
     print(model)
 
     ## TODO: Crop method
     if args.do_train:
         transformer = get_train_transform(512)
         dev_transformer = get_predict_transform(512)
-
 
 
         start_epoch = 0
@@ -317,6 +326,7 @@ def parse_argument():
     parser.add_argument('--dev_file', default='../data/dev.csv', type=str, help='dev file')
     parser.add_argument('--predict_file', default='../data/dev.csv', type=str, help='the input file for predict')
     parser.add_argument('--output', default='./prediction.csv', type=str, help='my prediction')
+    parser.add_argument('--save_path', default='../model', type=str, help='model save path')
 
     args = parser.parse_args()
     return args
